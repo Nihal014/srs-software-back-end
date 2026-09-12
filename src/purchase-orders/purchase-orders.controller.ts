@@ -4,6 +4,8 @@ import { CreatePoDto } from './dto/create-po.dto.js';
 import { UpdatePoDto } from './dto/update-po.dto.js';
 import { ApprovePoDto } from './dto/approve-po.dto.js';
 import type { PoStatus } from './po.interface.js';
+import { Roles } from '../auth/decorators/roles.decorator.js';
+import { USER_ROLE } from '../users/user.interface.js';
 
 @Controller('purchase-orders')
 export class PurchaseOrdersController {
@@ -34,6 +36,7 @@ export class PurchaseOrdersController {
     return this.purchaseOrders.sendForApproval(id);
   }
 
+  @Roles(USER_ROLE.Admin)
   @Post(':id/approve')
   approve(@Param('id', ParseIntPipe) id: number, @Body() dto: ApprovePoDto) {
     return this.purchaseOrders.approve(id, dto.acknowledgeThreshold ?? false);
