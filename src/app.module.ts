@@ -12,6 +12,8 @@ import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module.j
 import { GrnModule } from './grn/grn.module.js';
 import { BatchesModule } from './batches/batches.module.js';
 import { BundlingModule } from './bundling/bundling.module.js';
+import { PayrollModule } from './payroll/payroll.module.js';
+import { AccountsModule } from './accounts/accounts.module.js';
 
 @Module({
   imports: [
@@ -25,6 +27,8 @@ import { BundlingModule } from './bundling/bundling.module.js';
     GrnModule,
     BatchesModule,
     BundlingModule,
+    PayrollModule,
+    AccountsModule,
   ],
   providers: [
     // Every route requires a valid JWT by default (opt out with @Public()),
