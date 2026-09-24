@@ -128,9 +128,8 @@ Open `https://erp.rsrbakes.in` and log in with the admin you set in step 6.
 
 ## 9. Nightly backup
 ```bash
-sudo mkdir -p /var/backups/rsrbakes && sudo chown deploy:deploy /var/backups/rsrbakes
-chmod +x /srv/rsr/backend/deploy/*.sh
-crontab -e     # add:  15 2 * * * /srv/rsr/backend/deploy/backup.sh >> /var/log/rsr-backup.log 2>&1
+mkdir -p ~/backups/rsrbakes
+crontab -e     # add:  15 2 * * * bash /srv/rsr/backend/deploy/backup.sh >> /home/deploy/rsr-backup.log 2>&1
 ```
 Backups go to `~/backups/rsrbakes` and the last 30 days are kept. Test once by running `bash deploy/backup.sh` and
 check a `.sql.gz` appears. **Also copy a backup off the server now and then** (`scp`) — a backup on the same disk
@@ -139,7 +138,7 @@ does not survive losing the Droplet.
 **Restore test (do this once before going live):** `gunzip -c FILE.sql.gz | mysql -u rsr_bakes_app -p some_scratch_db`.
 
 ## 10. Routine releases
-- Backend: push to `master`, then on the server `cd /srv/rsr/backend && ./deploy/deploy.sh`
+- Backend: push to `master`, then on the server `cd /srv/rsr/backend && bash deploy/deploy.sh`
   (backs up the DB, pulls, builds, runs new migrations, reloads pm2).
 - Frontend: on your laptop `./deploy/upload.sh deploy@SERVER_IP`.
 - Deploy the backend first when a release adds API routes, then the frontend.
