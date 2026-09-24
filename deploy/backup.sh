@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Database backup:  ./deploy/backup.sh [label]
-# Nightly via cron (see SERVER-SETUP.md). Keeps 30 days in /var/backups/rsrbakes.
+# Nightly via cron (see SERVER-SETUP.md). Keeps 30 days in ~/backups/rsrbakes (override with BACKUP_DIR).
 # Reads DB_* from the backend .env, so it always dumps the database the API is using.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 set -a; . ./.env; set +a
 
-DIR=/var/backups/rsrbakes
+DIR="${BACKUP_DIR:-$HOME/backups/rsrbakes}"
 mkdir -p "$DIR"
 FILE="$DIR/${DB_NAME}_$(date +%Y%m%d_%H%M%S)${1:+_$1}.sql.gz"
 

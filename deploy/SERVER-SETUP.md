@@ -132,7 +132,7 @@ sudo mkdir -p /var/backups/rsrbakes && sudo chown deploy:deploy /var/backups/rsr
 chmod +x /srv/rsr/backend/deploy/*.sh
 crontab -e     # add:  15 2 * * * /srv/rsr/backend/deploy/backup.sh >> /var/log/rsr-backup.log 2>&1
 ```
-(Use `>> /home/deploy/rsr-backup.log` if `/var/log` isn't writable.) Test once by running `./deploy/backup.sh` and
+Backups go to `~/backups/rsrbakes` and the last 30 days are kept. Test once by running `bash deploy/backup.sh` and
 check a `.sql.gz` appears. **Also copy a backup off the server now and then** (`scp`) — a backup on the same disk
 does not survive losing the Droplet.
 

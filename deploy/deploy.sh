@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "==> backup before deploy"
-./deploy/backup.sh pre-deploy
+bash deploy/backup.sh pre-deploy
 
 echo "==> pull"
 git pull --ff-only
