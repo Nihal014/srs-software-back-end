@@ -17,6 +17,12 @@ export class CreateProductionDto {
   @Min(0)
   laborCostPerUnit?: number;
 
+  // Admin only: take labour from that day's payroll, shared across all payroll-based runs on the
+  // date (wages / total units). laborCostPerUnit is ignored when this is true.
+  @IsOptional()
+  @IsBoolean()
+  laborFromPayroll?: boolean;
+
   @IsOptional()
   @IsNumber()
   @Min(0)

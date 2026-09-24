@@ -1,5 +1,5 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import type { Pool, RowDataPacket } from 'mysql2/promise';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { DB_POOL } from '../config/database.module.js';
 import { BundleProductsService } from './bundle-products.service.js';
 import type { BundleProduction, RequirementLine } from './bundle.interface.js';
@@ -75,9 +75,103 @@ export class BundleProductionsService {
     return paging ? { rows, total: total!, page: paging.page, pageSize: paging.pageSize } : rows;
   }
 
+  /**
+   * Shares one day's payroll across every payroll-based run of that date: labour per unit =
+   * wages / total units of those runs, and each run's unit cost is refreshed to match. Runs whose
+   * labour was typed in by hand (labor_from_payroll = 0) are left exactly as they were.
+   */
+  private async recalculateLaborOn(conn: PoolConnection, date: string) {
+    const [wageRows] = await conn.query<RowDataPacket[]>(
+      'SELECT COALESCE(SUM(amount), 0) AS total FROM attendance_entries WHERE work_date = ?',
+      [date],
+    );
+    const wages = Number(wageRows[0].total);
+    const [runs] = await conn.query<RowDataPacket[]>(
+      `SELECT id, qty_produced, material_cost, overhead_cost_per_unit
+         FROM bundle_productions WHERE produced_date = ? AND labor_from_payroll = 1 FOR UPDATE`,
+      [date],
+    );
+    const units = runs.reduce((a, r) => a + Number(r.qty_produced), 0);
+    const laborPerUnit = units > 0 ? Math.round((wages / units) * 100) / 100 : 0;
+    for (const r of runs) {
+      const unitCost =
+        Math.round((Number(r.material_cost) / Number(r.qty_produced) + laborPerUnit + Number(r.overhead_cost_per_unit)) * 100) / 100;
+      await conn.query('UPDATE bundle_productions SET labor_cost_per_unit = ?, unit_cost = ? WHERE id = ?', [laborPerUnit, unitCost, r.id]);
+    }
+    return { wages, units, laborPerUnit, runs: runs.length };
+  }
+
+  /** Re-runs the day's labour split, e.g. after payroll for that date was corrected. */
+  async recalculateLabor(date: string) {
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const result = await this.recalculateLaborOn(conn, date);
+      await conn.commit();
+      return result;
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  /** One row per date that has production, newest first. Wages are only included for Admins. */
+  async findDays(paging: { page: number; pageSize: number; offset: number }, includeWages: boolean): Promise<Paged<any>> {
+    const [countRows] = await this.pool.query<RowDataPacket[]>(
+      'SELECT COUNT(DISTINCT produced_date) AS total FROM bundle_productions',
+    );
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      `SELECT DATE_FORMAT(produced_date, '%Y-%m-%d') AS date, COUNT(*) AS runs,
+              SUM(qty_produced) AS units, SUM(labor_from_payroll) AS payroll_runs
+         FROM bundle_productions
+        GROUP BY produced_date
+        ORDER BY produced_date DESC
+        LIMIT ? OFFSET ?`,
+      [paging.pageSize, paging.offset],
+    );
+    if (includeWages && rows.length) {
+      const [wageRows] = await this.pool.query<RowDataPacket[]>(
+        `SELECT DATE_FORMAT(work_date, '%Y-%m-%d') AS date, SUM(amount) AS wages
+           FROM attendance_entries WHERE work_date IN (?) GROUP BY work_date`,
+        [rows.map((r) => r.date)],
+      );
+      const byDate = new Map(wageRows.map((w) => [w.date as string, Number(w.wages)]));
+      for (const r of rows) r.wages = byDate.get(r.date) ?? 0;
+    }
+    return { rows, total: Number(countRows[0].total), page: paging.page, pageSize: paging.pageSize };
+  }
+
+  /** Everything the "production day" screen needs: that date's runs plus its payroll picture. */
+  async getDay(date: string, includeWages: boolean) {
+    const [runs] = await this.pool.query<RowDataPacket[]>(
+      `SELECT bp.*, b.code AS bundle_code, b.name AS bundle_name, b.output_unit
+         FROM bundle_productions bp
+         JOIN bundle_products b ON b.id = bp.bundle_product_id
+        WHERE bp.produced_date = ?
+        ORDER BY bp.id`,
+      [date],
+    );
+    const totalUnits = runs.reduce((a, r) => a + Number(r.qty_produced), 0);
+    const payrollUnits = runs.filter((r) => r.labor_from_payroll).reduce((a, r) => a + Number(r.qty_produced), 0);
+    let wages: number | null = null;
+    let staffCount = 0;
+    if (includeWages) {
+      const [wageRows] = await this.pool.query<RowDataPacket[]>(
+        'SELECT COALESCE(SUM(amount), 0) AS total, COUNT(DISTINCT staff_id) AS staff FROM attendance_entries WHERE work_date = ?',
+        [date],
+      );
+      wages = Number(wageRows[0].total);
+      staffCount = Number(wageRows[0].staff);
+    }
+    return { date, runs, totalUnits, payrollUnits, wages, staffCount };
+  }
+
   async findOne(id: number) {
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      `SELECT bp.*, b.code AS bundle_code, b.name AS bundle_name, b.output_unit
+      `SELECT bp.*, DATE_FORMAT(bp.produced_date, '%Y-%m-%d') AS produced_date,
+              b.code AS bundle_code, b.name AS bundle_name, b.output_unit
          FROM bundle_productions bp
          JOIN bundle_products b ON b.id = bp.bundle_product_id
         WHERE bp.id = ?`,
@@ -103,7 +197,10 @@ export class BundleProductionsService {
     return { ...production, consumptions };
   }
 
-  async create(dto: CreateProductionDto, userId: number): Promise<BundleProduction> {
+  async create(dto: CreateProductionDto, userId: number, isAdmin = false): Promise<BundleProduction> {
+    if (dto.laborFromPayroll && !isAdmin) {
+      throw new ForbiddenException('Only an Admin can take labour cost from payroll.');
+    }
     const conn = await this.pool.getConnection();
     try {
       await conn.beginTransaction();
@@ -202,7 +299,10 @@ export class BundleProductionsService {
       }
 
       const qtyProduced = dto.qtyProduced;
-      const laborCostPerUnit = dto.laborCostPerUnit ?? 0;
+      // Payroll-based labour is filled in by recalculateLabor() below, once this run is in the table
+      // (it shares the day's wages across every payroll-based run of the date, this one included).
+      const laborFromPayroll = !!dto.laborFromPayroll;
+      const laborCostPerUnit = laborFromPayroll ? 0 : (dto.laborCostPerUnit ?? 0);
       const overheadCostPerUnit = dto.overheadCostPerUnit ?? 0;
       const materialCostPerUnit = materialCostTotal / qtyProduced;
       const unitCost = Math.round((materialCostPerUnit + laborCostPerUnit + overheadCostPerUnit) * 100) / 100;
@@ -210,14 +310,15 @@ export class BundleProductionsService {
       const [result] = await conn.query<any>(
         `INSERT INTO bundle_productions
            (production_number, bundle_product_id, qty_produced, produced_date, material_cost,
-            labor_cost_per_unit, overhead_cost_per_unit, unit_cost, selling_price, shortage_override, created_by)
-         VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            labor_cost_per_unit, labor_from_payroll, overhead_cost_per_unit, unit_cost, selling_price, shortage_override, created_by)
+         VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           dto.bundleProductId,
           qtyProduced,
           dto.producedDate ?? toDateStr(new Date()),
           Math.round(materialCostTotal * 100) / 100,
           laborCostPerUnit,
+          laborFromPayroll ? 1 : 0,
           overheadCostPerUnit,
           unitCost,
           dto.sellingPrice ?? bundle.selling_price,
@@ -239,6 +340,10 @@ export class BundleProductionsService {
           [productionId, c.batchId, c.itemId, c.qty, c.rate, c.cost],
         );
         await conn.query('UPDATE batches SET qty_consumed = qty_consumed + ? WHERE id = ?', [c.qty, c.batchId]);
+      }
+
+      if (laborFromPayroll) {
+        await this.recalculateLaborOn(conn, dto.producedDate ?? toDateStr(new Date()));
       }
 
       await conn.commit();
