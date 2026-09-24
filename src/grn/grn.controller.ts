@@ -1,14 +1,16 @@
 import { Body, Controller, Get, Param, ParseIntPipe, Post, Query } from '@nestjs/common';
 import { GrnService } from './grn.service.js';
 import { CreateGrnDto } from './dto/create-grn.dto.js';
+import { parsePaging } from '../common/pagination.util.js';
 
 @Controller('grns')
 export class GrnController {
   constructor(private readonly grn: GrnService) {}
 
   @Get()
-  findAll() {
-    return this.grn.findAll();
+  findAll(@Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+    const paging = parsePaging(page, pageSize);
+    return paging ? this.grn.findAll(paging) : this.grn.findAll();
   }
 
   @Get('new-context')

@@ -1,14 +1,17 @@
 import { Body, Controller, Delete, Get, Param, ParseIntPipe, NotFoundException, Patch, Post, Query } from '@nestjs/common';
 import { ItemsService } from './items.service.js';
 import { UpsertItemDto } from './dto/upsert-item.dto.js';
+import { parsePaging } from '../common/pagination.util.js';
 
 @Controller('items')
 export class ItemsController {
   constructor(private readonly items: ItemsService) {}
 
   @Get()
-  findAll(@Query('all') all?: string) {
-    return all === 'true' ? this.items.findAllForAdmin() : this.items.findAll();
+  findAll(@Query('all') all?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+    if (all !== 'true') return this.items.findAll();
+    const paging = parsePaging(page, pageSize);
+    return paging ? this.items.findAllForAdmin(paging) : this.items.findAllForAdmin();
   }
 
   @Get(':id')

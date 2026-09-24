@@ -4,6 +4,7 @@ import { DB_POOL } from '../config/database.module.js';
 import { BundleProductsService } from './bundle-products.service.js';
 import type { BundleProduction, RequirementLine } from './bundle.interface.js';
 import type { CreateProductionDto } from './dto/create-production.dto.js';
+import type { Paged } from '../common/pagination.util.js';
 
 function toDateStr(d: Date) {
   return d.toISOString().slice(0, 10);
@@ -30,8 +31,10 @@ export class BundleProductionsService {
     const lines: RequirementLine[] = [];
     for (const bom of bundle.bomLines) {
       const required = Math.round(bom.qty_per_unit * qty * 1000) / 1000;
+      // Expired batches (expiry before today, same rule as days_to_expiry) are never usable.
       const [rows] = await this.pool.query<RowDataPacket[]>(
-        `SELECT COALESCE(SUM(qty_received - qty_consumed + qty_adjusted), 0) AS available
+        `SELECT COALESCE(SUM(CASE WHEN expiry_date >= CURDATE() THEN qty_received - qty_consumed + qty_adjusted END), 0) AS available,
+                COALESCE(SUM(CASE WHEN expiry_date < CURDATE() THEN qty_received - qty_consumed + qty_adjusted END), 0) AS expired
            FROM batches WHERE item_id = ? AND is_quarantined = 0`,
         [bom.item_id],
       );
@@ -43,20 +46,33 @@ export class BundleProductionsService {
         unit: bom.unit,
         required,
         available,
+        expired: Math.max(0, Number(rows[0].expired)),
         shortage: Math.max(0, Math.round((required - available) * 1000) / 1000),
       });
     }
     return lines;
   }
 
-  async findAll() {
+  /** With `paging` omitted, returns the plain array as before; with `paging` set, returns
+   * `{rows, total, page, pageSize}` for the paginated production list screen. */
+  async findAll(): Promise<any[]>;
+  async findAll(paging: { page: number; pageSize: number; offset: number }): Promise<Paged<any>>;
+  async findAll(paging?: { page: number; pageSize: number; offset: number }) {
+    let total: number | null = null;
+    if (paging) {
+      const [countRows] = await this.pool.query<RowDataPacket[]>('SELECT COUNT(*) AS total FROM bundle_productions');
+      total = Number(countRows[0].total);
+    }
+    const limitClause = paging ? 'LIMIT ? OFFSET ?' : '';
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT bp.*, b.code AS bundle_code, b.name AS bundle_name
          FROM bundle_productions bp
          JOIN bundle_products b ON b.id = bp.bundle_product_id
-        ORDER BY bp.produced_date DESC, bp.id DESC`,
+        ORDER BY bp.produced_date DESC, bp.id DESC
+        ${limitClause}`,
+      paging ? [paging.pageSize, paging.offset] : [],
     );
-    return rows;
+    return paging ? { rows, total: total!, page: paging.page, pageSize: paging.pageSize } : rows;
   }
 
   async findOne(id: number) {
@@ -127,7 +143,8 @@ export class BundleProductionsService {
         const [batches] = await conn.query<AvailableBatch[]>(
           `SELECT id, (qty_received - qty_consumed + qty_adjusted) AS qty_available, ? AS rate
              FROM batches
-            WHERE item_id = ? AND is_quarantined = 0 AND (qty_received - qty_consumed + qty_adjusted) > 0
+            WHERE item_id = ? AND is_quarantined = 0 AND expiry_date >= CURDATE()
+              AND (qty_received - qty_consumed + qty_adjusted) > 0
             ORDER BY expiry_date ASC
             FOR UPDATE`,
           [bom.rate, bom.item_id],
@@ -179,7 +196,7 @@ export class BundleProductionsService {
         );
         if (noBatchAtAll) {
           throw new BadRequestException(
-            'Cannot override: at least one ingredient has no batches at all to consume from.',
+            'Cannot override: at least one ingredient has no unexpired batches to consume from.',
           );
         }
       }

@@ -3,6 +3,9 @@ import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { DB_POOL } from '../config/database.module.js';
 import type { Item } from './item.interface.js';
 import type { UpsertItemDto } from './dto/upsert-item.dto.js';
+import type { Paged } from '../common/pagination.util.js';
+
+type Paging = { page: number; pageSize: number; offset: number };
 
 @Injectable()
 export class ItemsService {
@@ -15,11 +18,22 @@ export class ItemsService {
     return rows;
   }
 
-  async findAllForAdmin(): Promise<Item[]> {
+  /** With `paging` omitted, returns the plain array as before — the Bundle Recipes ingredient
+   * dropdown needs every item, so it always calls this unpaginated. With `paging` set, returns
+   * `{rows, total, page, pageSize}` for the paginated Items master screen. */
+  async findAllForAdmin(): Promise<Item[]>;
+  async findAllForAdmin(paging: Paging): Promise<Paged<Item>>;
+  async findAllForAdmin(paging?: Paging): Promise<Item[] | Paged<Item>> {
+    if (!paging) {
+      const [rows] = await this.pool.query<(Item & RowDataPacket)[]>('SELECT * FROM items ORDER BY name');
+      return rows;
+    }
+    const [countRows] = await this.pool.query<RowDataPacket[]>('SELECT COUNT(*) AS total FROM items');
     const [rows] = await this.pool.query<(Item & RowDataPacket)[]>(
-      'SELECT * FROM items ORDER BY name',
+      'SELECT * FROM items ORDER BY name LIMIT ? OFFSET ?',
+      [paging.pageSize, paging.offset],
     );
-    return rows;
+    return { rows, total: Number(countRows[0].total), page: paging.page, pageSize: paging.pageSize };
   }
 
   async findById(id: number): Promise<Item | null> {

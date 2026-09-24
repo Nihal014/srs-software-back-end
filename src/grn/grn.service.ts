@@ -4,6 +4,7 @@ import { DB_POOL } from '../config/database.module.js';
 import { ItemsService } from '../items/items.service.js';
 import { PurchaseOrdersService } from '../purchase-orders/purchase-orders.service.js';
 import { PO_STATUS, PO_STATUS_LABEL, type PoStatus } from '../purchase-orders/po.interface.js';
+import type { Paged } from '../common/pagination.util.js';
 import { mnemonicFor, shelfLifeDaysFor } from './batch-code.js';
 import type { CreateGrnDto } from './dto/create-grn.dto.js';
 
@@ -21,7 +22,17 @@ export class GrnService {
     private readonly purchaseOrders: PurchaseOrdersService,
   ) {}
 
-  async findAll() {
+  /** With `paging` omitted, returns the plain array as before; with `paging` set, returns
+   * `{rows, total, page, pageSize}` for the paginated GRN list screen. */
+  async findAll(): Promise<any[]>;
+  async findAll(paging: { page: number; pageSize: number; offset: number }): Promise<Paged<any>>;
+  async findAll(paging?: { page: number; pageSize: number; offset: number }) {
+    let total: number | null = null;
+    if (paging) {
+      const [countRows] = await this.pool.query<RowDataPacket[]>('SELECT COUNT(*) AS total FROM grns');
+      total = Number(countRows[0].total);
+    }
+    const limitClause = paging ? 'LIMIT ? OFFSET ?' : '';
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT g.id, g.grn_number, g.received_date, po.po_number, po.id AS purchase_order_id,
               s.name AS supplier_name,
@@ -34,9 +45,11 @@ export class GrnService {
          JOIN suppliers s ON s.id = po.supplier_id
          JOIN grn_lines gl ON gl.grn_id = g.id
         GROUP BY g.id
-        ORDER BY g.received_date DESC, g.id DESC`,
+        ORDER BY g.received_date DESC, g.id DESC
+        ${limitClause}`,
+      paging ? [paging.pageSize, paging.offset] : [],
     );
-    return rows;
+    return paging ? { rows, total: total!, page: paging.page, pageSize: paging.pageSize } : rows;
   }
 
   async findOne(id: number) {

@@ -8,6 +8,7 @@ import {
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { DB_POOL } from '../config/database.module.js';
 import { ItemsService } from '../items/items.service.js';
+import type { Paged } from '../common/pagination.util.js';
 import type { CreatePoDto } from './dto/create-po.dto.js';
 import type { UpdatePoDto } from './dto/update-po.dto.js';
 import type { PoLineDto } from './dto/po-line.dto.js';
@@ -41,7 +42,26 @@ export class PurchaseOrdersService {
     }
   }
 
-  async findAll(status?: PoStatus) {
+  /** With `paging` omitted, returns the plain array as before (used by the PO create dialog's
+   * "outstanding elsewhere" checks etc.); with `paging` set, returns `{rows, total, page, pageSize}`
+   * for the paginated PO list screen. */
+  async findAll(status?: PoStatus): Promise<any[]>;
+  async findAll(status: PoStatus | undefined, paging: { page: number; pageSize: number; offset: number }): Promise<Paged<any>>;
+  async findAll(status?: PoStatus, paging?: { page: number; pageSize: number; offset: number }) {
+    const where = `WHERE (? IS NULL OR po.status = ?)`;
+    const params = [status ?? null, status ?? null];
+
+    let total: number | null = null;
+    if (paging) {
+      const [countRows] = await this.pool.query<RowDataPacket[]>(
+        `SELECT COUNT(*) AS total FROM purchase_orders po ${where}`,
+        params,
+      );
+      total = Number(countRows[0].total);
+    }
+
+    const limitClause = paging ? 'LIMIT ? OFFSET ?' : '';
+    const queryParams = paging ? [...params, paging.pageSize, paging.offset] : params;
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT po.id, po.po_number, po.status, po.expected_date, po.created_at,
               s.id AS supplier_id, s.name AS supplier_name,
@@ -63,14 +83,16 @@ export class PurchaseOrdersService {
              JOIN purchase_order_lines pol ON pol.id = gl.purchase_order_line_id
             GROUP BY pol.purchase_order_id
          ) rc ON rc.purchase_order_id = po.id
-        WHERE (? IS NULL OR po.status = ?)
-        ORDER BY po.created_at DESC`,
-      [status ?? null, status ?? null],
+        ${where}
+        ORDER BY po.created_at DESC
+        ${limitClause}`,
+      queryParams,
     );
-    return rows.map((r) => ({
+    const mapped = rows.map((r) => ({
       ...r,
       qtyOutstanding: Math.max(0, Number(r.qty_ordered) - Number(r.qty_received)),
     }));
+    return paging ? { rows: mapped, total: total!, page: paging.page, pageSize: paging.pageSize } : mapped;
   }
 
   async findOne(id: number): Promise<any> {

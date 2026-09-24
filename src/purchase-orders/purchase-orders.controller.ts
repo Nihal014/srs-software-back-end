@@ -6,14 +6,22 @@ import { ApprovePoDto } from './dto/approve-po.dto.js';
 import type { PoStatus } from './po.interface.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import { USER_ROLE } from '../users/user.interface.js';
+import { parsePaging } from '../common/pagination.util.js';
 
 @Controller('purchase-orders')
 export class PurchaseOrdersController {
   constructor(private readonly purchaseOrders: PurchaseOrdersService) {}
 
   @Get()
-  findAll(@Query('status', new ParseIntPipe({ optional: true })) status?: number) {
-    return this.purchaseOrders.findAll(status as PoStatus | undefined);
+  findAll(
+    @Query('status', new ParseIntPipe({ optional: true })) status?: number,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    const paging = parsePaging(page, pageSize);
+    return paging
+      ? this.purchaseOrders.findAll(status as PoStatus | undefined, paging)
+      : this.purchaseOrders.findAll(status as PoStatus | undefined);
   }
 
   @Get(':id')
