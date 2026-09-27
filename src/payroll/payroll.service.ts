@@ -6,15 +6,24 @@ import type { SaveDayDto } from './dto/save-day.dto.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+const toMinutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+
+/** Minutes between in and out; an out time at or before the in time means the shift ran past midnight. */
+function workedMinutes(inTime: string, outTime: string): number {
+  const diff = toMinutes(outTime) - toMinutes(inTime);
+  return diff > 0 ? diff : diff + 24 * 60;
+}
+
 @Injectable()
 export class PayrollService {
   constructor(@Inject(DB_POOL) private readonly pool: Pool) {}
 
   /** Every active staff member for the date, with their entry if one exists (inactive staff only if they have one). */
-  async getDay(date: string): Promise<DaySheet> {
+  async getDay(date: string, isAdmin = true): Promise<DaySheet> {
     const [rows] = await this.pool.query<(DayEntryRow & RowDataPacket)[]>(
       `SELECT s.id AS staff_id, s.name, s.pay_type, s.pay_rate,
-              e.id AS entry_id, e.hours, e.amount
+              e.id AS entry_id, TIME_FORMAT(e.in_time, '%H:%i') AS in_time, TIME_FORMAT(e.out_time, '%H:%i') AS out_time,
+              e.hours, e.amount
          FROM staff s
          LEFT JOIN attendance_entries e ON e.staff_id = s.id AND e.work_date = ?
         WHERE s.is_active = 1 OR e.id IS NOT NULL
@@ -22,6 +31,15 @@ export class PayrollService {
       [date],
     );
     const worked = rows.filter((r) => r.entry_id !== null);
+    // Wages are for admins only: the kitchen supervisor enters times and never sees rates or amounts.
+    if (!isAdmin) {
+      return {
+        date,
+        rows: rows.map((r) => ({ ...r, pay_rate: null, amount: null })),
+        total: null,
+        staffCount: worked.length,
+      };
+    }
     return {
       date,
       rows,
@@ -30,7 +48,7 @@ export class PayrollService {
     };
   }
 
-  async saveDay(dto: SaveDayDto, userId: number): Promise<DaySheet> {
+  async saveDay(dto: SaveDayDto, userId: number, isAdmin = true): Promise<DaySheet> {
     const conn = await this.pool.getConnection();
     try {
       await conn.beginTransaction();
@@ -47,28 +65,53 @@ export class PayrollService {
           continue;
         }
 
+        const rate = Number(staff.pay_rate);
+        let hours: number | null = null;
+        let inTime: string | null = null;
+        let outTime: string | null = null;
         let amount: number;
-        if (line.amount !== undefined) {
-          amount = round2(line.amount);
-        } else if ((staff.pay_type as PayType) === PAY_TYPE.Hourly) {
-          if (!line.hours || line.hours <= 0) {
-            throw new BadRequestException(`${staff.name}: enter the hours worked.`);
+
+        if ((staff.pay_type as PayType) === PAY_TYPE.Hourly) {
+          if (line.inTime && line.outTime) {
+            if (line.inTime === line.outTime) {
+              throw new BadRequestException(`${staff.name}: in time and out time are the same.`);
+            }
+            const minutes = workedMinutes(line.inTime, line.outTime);
+            inTime = line.inTime;
+            outTime = line.outTime;
+            hours = round2(minutes / 60);
+            amount = round2((minutes / 60) * rate);
+          } else if (line.inTime || line.outTime) {
+            throw new BadRequestException(`${staff.name}: enter both the in time and the out time.`);
+          } else if (line.hours && line.hours > 0) {
+            // Entries made before in/out times existed carry hours only.
+            hours = line.hours;
+            amount = round2(line.hours * rate);
+          } else {
+            throw new BadRequestException(`${staff.name}: enter the in time and out time.`);
           }
-          amount = round2(line.hours * Number(staff.pay_rate));
+        } else if (isAdmin && line.amount !== undefined) {
+          amount = round2(line.amount);
         } else {
-          amount = round2(Number(staff.pay_rate));
+          // A day rate stays as saved (an admin may have adjusted it); a new entry gets the staff rate.
+          const [existing] = await conn.query<RowDataPacket[]>(
+            'SELECT amount FROM attendance_entries WHERE staff_id = ? AND work_date = ?',
+            [line.staffId, dto.date],
+          );
+          amount = existing[0] ? Number(existing[0].amount) : round2(rate);
         }
 
         await conn.query(
-          `INSERT INTO attendance_entries (staff_id, work_date, hours, amount, remarks, created_by)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE hours = VALUES(hours), amount = VALUES(amount), remarks = VALUES(remarks)`,
-          [line.staffId, dto.date, line.hours ?? null, amount, line.remarks?.trim() || null, userId],
+          `INSERT INTO attendance_entries (staff_id, work_date, in_time, out_time, hours, amount, remarks, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE in_time = VALUES(in_time), out_time = VALUES(out_time), hours = VALUES(hours),
+                                   amount = VALUES(amount), remarks = VALUES(remarks)`,
+          [line.staffId, dto.date, inTime, outTime, hours, amount, line.remarks?.trim() || null, userId],
         );
       }
 
       await conn.commit();
-      return this.getDay(dto.date);
+      return this.getDay(dto.date, isAdmin);
     } catch (err) {
       await conn.rollback();
       throw err;

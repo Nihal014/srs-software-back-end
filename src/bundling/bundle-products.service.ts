@@ -32,9 +32,10 @@ export class BundleProductsService {
 
     const [bomLines] = await this.pool.query<RowDataPacket[]>(
       `SELECT bl.id, bl.bundle_product_id, bl.item_id, i.code AS item_code, i.name AS item_name,
-              i.unit, bl.qty_per_unit
+              i.unit, ic.name AS category_name, bl.qty_per_unit
          FROM bundle_bom_lines bl
          JOIN items i ON i.id = bl.item_id
+         LEFT JOIN item_categories ic ON ic.id = i.category_id
         WHERE bl.bundle_product_id = ?
         ORDER BY i.name`,
       [id],

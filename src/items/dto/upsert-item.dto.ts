@@ -1,4 +1,4 @@
-import { IsBoolean, IsIn, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
 
 const UNITS = ['kg', 'pcs', 'g', 'l', 'ml'];
 
@@ -13,6 +13,11 @@ export class UpsertItemDto {
 
   @IsIn(UNITS)
   unit!: string;
+
+  // Optional category from Master Data. null clears it; leaving it out on an update keeps the current one.
+  @IsOptional()
+  @IsInt()
+  categoryId?: number | null;
 
   // Only used when creating a brand-new item with no purchase history yet —
   // updates never touch rate, since it's the weighted-average maintained by

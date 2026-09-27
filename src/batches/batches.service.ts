@@ -5,12 +5,13 @@ import type { Paged } from '../common/pagination.util.js';
 import type { AdjustBatchDto } from './dto/adjust-batch.dto.js';
 
 const BATCH_SELECT = `
-  SELECT b.*, i.name AS item_name, i.unit, i.rate AS item_rate,
+  SELECT b.*, i.name AS item_name, i.unit, i.rate AS item_rate, ic.name AS category_name,
          gl.grn_id, g.grn_number, g.purchase_order_id, po.po_number,
          (b.qty_received - b.qty_consumed + b.qty_adjusted) AS qty_available,
          DATEDIFF(b.expiry_date, CURDATE()) AS days_to_expiry
     FROM batches b
     JOIN items i ON i.id = b.item_id
+    LEFT JOIN item_categories ic ON ic.id = i.category_id
     JOIN grn_lines gl ON gl.id = b.grn_line_id
     JOIN grns g ON g.id = gl.grn_id
     JOIN purchase_orders po ON po.id = g.purchase_order_id

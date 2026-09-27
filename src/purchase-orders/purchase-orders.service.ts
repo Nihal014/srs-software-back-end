@@ -107,10 +107,11 @@ export class PurchaseOrdersService {
     if (!po) throw new NotFoundException(`Purchase order ${id} not found`);
 
     const [lines] = await this.pool.query<RowDataPacket[]>(
-      `SELECT pol.*, i.code AS item_code, i.name AS item_name, i.unit,
+      `SELECT pol.*, i.code AS item_code, i.name AS item_name, i.unit, ic.name AS category_name,
               COALESCE(rc.qty_received, 0) AS qty_received
          FROM purchase_order_lines pol
          JOIN items i ON i.id = pol.item_id
+         LEFT JOIN item_categories ic ON ic.id = i.category_id
          LEFT JOIN (
            SELECT purchase_order_line_id, SUM(qty_received) AS qty_received
              FROM grn_lines GROUP BY purchase_order_line_id

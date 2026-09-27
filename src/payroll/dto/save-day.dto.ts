@@ -1,6 +1,8 @@
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsInt, IsNumber, IsOptional, IsString, Matches, Min, ValidateNested } from 'class-validator';
 
+const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 export class DayLineDto {
   @IsInt()
   staffId!: number;
@@ -13,6 +15,15 @@ export class DayLineDto {
   @IsNumber()
   @Min(0)
   hours?: number;
+
+  // 24-hour HH:mm. Hourly staff: hours are worked out from these; out earlier than in = past midnight.
+  @IsOptional()
+  @Matches(TIME, { message: 'inTime must be HH:mm' })
+  inTime?: string;
+
+  @IsOptional()
+  @Matches(TIME, { message: 'outTime must be HH:mm' })
+  outTime?: string;
 
   // Optional explicit amount (e.g. a fixed payment). Omitted = computed from the staff member's rate.
   @IsOptional()

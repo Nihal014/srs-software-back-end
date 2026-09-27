@@ -65,10 +65,11 @@ export class GrnService {
     if (!grn) throw new NotFoundException(`GRN ${id} not found`);
 
     const [lines] = await this.pool.query<RowDataPacket[]>(
-      `SELECT gl.*, i.name AS item_name, i.unit,
+      `SELECT gl.*, i.name AS item_name, i.unit, ic.name AS category_name,
               b.id AS batch_id
          FROM grn_lines gl
          JOIN items i ON i.id = gl.item_id
+         LEFT JOIN item_categories ic ON ic.id = i.category_id
          LEFT JOIN batches b ON b.grn_line_id = gl.id
         WHERE gl.grn_id = ?
         ORDER BY gl.id`,
@@ -94,10 +95,11 @@ export class GrnService {
 
     const [lines] = await this.pool.query<RowDataPacket[]>(
       `SELECT pol.id AS purchase_order_line_id, pol.item_id, i.code AS item_code, i.name AS item_name,
-              i.unit, pol.qty_ordered, pol.rate,
+              i.unit, ic.name AS category_name, pol.qty_ordered, pol.rate,
               COALESCE(rc.qty_received, 0) AS prior_received
          FROM purchase_order_lines pol
          JOIN items i ON i.id = pol.item_id
+         LEFT JOIN item_categories ic ON ic.id = i.category_id
          LEFT JOIN (
            SELECT purchase_order_line_id, SUM(qty_received) AS qty_received
              FROM grn_lines GROUP BY purchase_order_line_id

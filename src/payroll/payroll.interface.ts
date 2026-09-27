@@ -19,8 +19,10 @@ export interface DayEntryRow {
   staff_id: number;
   name: string;
   pay_type: PayType;
-  pay_rate: number;
+  pay_rate: number | null;
   entry_id: number | null;
+  in_time: string | null;
+  out_time: string | null;
   hours: number | null;
   amount: number | null;
 }
@@ -28,6 +30,6 @@ export interface DayEntryRow {
 export interface DaySheet {
   date: string;
   rows: DayEntryRow[];
-  total: number;
+  total: number | null;
   staffCount: number;
 }

@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { DB_POOL } from '../config/database.module.js';
 import type { Item } from './item.interface.js';
@@ -13,7 +13,7 @@ export class ItemsService {
 
   async findAll(): Promise<Item[]> {
     const [rows] = await this.pool.query<(Item & RowDataPacket)[]>(
-      'SELECT * FROM items WHERE is_active = 1 ORDER BY name',
+      `SELECT i.*, c.name AS category_name, c.code AS category_code FROM items i LEFT JOIN item_categories c ON c.id = i.category_id WHERE i.is_active = 1 ORDER BY i.name`,
     );
     return rows;
   }
@@ -25,30 +25,37 @@ export class ItemsService {
   async findAllForAdmin(paging: Paging): Promise<Paged<Item>>;
   async findAllForAdmin(paging?: Paging): Promise<Item[] | Paged<Item>> {
     if (!paging) {
-      const [rows] = await this.pool.query<(Item & RowDataPacket)[]>('SELECT * FROM items ORDER BY name');
+      const [rows] = await this.pool.query<(Item & RowDataPacket)[]>(`SELECT i.*, c.name AS category_name, c.code AS category_code FROM items i LEFT JOIN item_categories c ON c.id = i.category_id ORDER BY i.name`);
       return rows;
     }
     const [countRows] = await this.pool.query<RowDataPacket[]>('SELECT COUNT(*) AS total FROM items');
     const [rows] = await this.pool.query<(Item & RowDataPacket)[]>(
-      'SELECT * FROM items ORDER BY name LIMIT ? OFFSET ?',
+      `SELECT i.*, c.name AS category_name, c.code AS category_code FROM items i LEFT JOIN item_categories c ON c.id = i.category_id ORDER BY i.name LIMIT ? OFFSET ?`,
       [paging.pageSize, paging.offset],
     );
     return { rows, total: Number(countRows[0].total), page: paging.page, pageSize: paging.pageSize };
   }
 
+  private async assertCategory(categoryId?: number | null) {
+    if (categoryId === undefined || categoryId === null) return;
+    const [rows] = await this.pool.query<RowDataPacket[]>('SELECT id FROM item_categories WHERE id = ?', [categoryId]);
+    if (!rows.length) throw new BadRequestException(`Category ${categoryId} does not exist.`);
+  }
+
   async findById(id: number): Promise<Item | null> {
     const [rows] = await this.pool.query<(Item & RowDataPacket)[]>(
-      'SELECT * FROM items WHERE id = ?',
+      `SELECT i.*, c.name AS category_name, c.code AS category_code FROM items i LEFT JOIN item_categories c ON c.id = i.category_id WHERE i.id = ?`,
       [id],
     );
     return rows[0] ?? null;
   }
 
   async create(dto: UpsertItemDto): Promise<Item> {
+    await this.assertCategory(dto.categoryId);
     try {
       const [result] = await this.pool.query<any>(
-        `INSERT INTO items (code, name, unit, rate, reorder_level) VALUES (?, ?, ?, ?, ?)`,
-        [dto.code.trim().toUpperCase(), dto.name.trim(), dto.unit, dto.rate ?? 0, dto.reorderLevel],
+        `INSERT INTO items (code, name, unit, category_id, rate, reorder_level) VALUES (?, ?, ?, ?, ?, ?)`,
+        [dto.code.trim().toUpperCase(), dto.name.trim(), dto.unit, dto.categoryId ?? null, dto.rate ?? 0, dto.reorderLevel],
       );
       return (await this.findById(result.insertId))!;
     } catch (err: any) {
@@ -65,13 +72,17 @@ export class ItemsService {
     const existing = await this.findById(id);
     if (!existing) throw new NotFoundException(`Item ${id} not found`);
 
+    await this.assertCategory(dto.categoryId);
+    // categoryId left out = keep the current category; null = clear it.
+    const categoryId = dto.categoryId === undefined ? existing.category_id : dto.categoryId;
     try {
       await this.pool.query(
-        `UPDATE items SET code = ?, name = ?, unit = ?, reorder_level = ?, is_active = ? WHERE id = ?`,
+        `UPDATE items SET code = ?, name = ?, unit = ?, category_id = ?, reorder_level = ?, is_active = ? WHERE id = ?`,
         [
           dto.code.trim().toUpperCase(),
           dto.name.trim(),
           dto.unit,
+          categoryId,
           dto.reorderLevel,
           dto.isActive ?? existing.is_active,
           id,

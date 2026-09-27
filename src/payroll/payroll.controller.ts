@@ -13,14 +13,17 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 export class PayrollController {
   constructor(private readonly payroll: PayrollService) {}
 
+  // The kitchen supervisor (a Staff user) records in/out times here; wages are hidden from them.
+  @Roles(USER_ROLE.Admin, USER_ROLE.Staff)
   @Get('day')
-  getDay(@Query('date') date: string) {
-    return this.payroll.getDay(this.validDate(date));
+  getDay(@Query('date') date: string, @CurrentUser() user: JwtPayload) {
+    return this.payroll.getDay(this.validDate(date), user.role === USER_ROLE.Admin);
   }
 
+  @Roles(USER_ROLE.Admin, USER_ROLE.Staff)
   @Put('day')
   saveDay(@Body() dto: SaveDayDto, @CurrentUser() user: JwtPayload) {
-    return this.payroll.saveDay(dto, user.sub);
+    return this.payroll.saveDay(dto, user.sub, user.role === USER_ROLE.Admin);
   }
 
   @Get('day-total')
