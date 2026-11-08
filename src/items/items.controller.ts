@@ -8,10 +8,10 @@ export class ItemsController {
   constructor(private readonly items: ItemsService) {}
 
   @Get()
-  findAll(@Query('all') all?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+  findAll(@Query('all') all?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('search') search?: string) {
     if (all !== 'true') return this.items.findAll();
     const paging = parsePaging(page, pageSize);
-    return paging ? this.items.findAllForAdmin(paging) : this.items.findAllForAdmin();
+    return paging ? this.items.findAllForAdmin(paging, search) : this.items.findAllForAdmin();
   }
 
   // Static route: must stay above ':id'.

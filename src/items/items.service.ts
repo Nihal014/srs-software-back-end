@@ -36,16 +36,21 @@ export class ItemsService {
    * dropdown needs every item, so it always calls this unpaginated. With `paging` set, returns
    * `{rows, total, page, pageSize}` for the paginated Items master screen. */
   async findAllForAdmin(): Promise<Item[]>;
-  async findAllForAdmin(paging: Paging): Promise<Paged<Item>>;
-  async findAllForAdmin(paging?: Paging): Promise<Item[] | Paged<Item>> {
+  async findAllForAdmin(paging: Paging, search?: string): Promise<Paged<Item>>;
+  async findAllForAdmin(paging?: Paging, search?: string): Promise<Item[] | Paged<Item>> {
     if (!paging) {
       const [rows] = await this.pool.query<(Item & RowDataPacket)[]>(`SELECT i.*, c.name AS category_name, c.code AS category_code FROM items i LEFT JOIN item_categories c ON c.id = i.category_id ORDER BY i.name`);
       return rows;
     }
-    const [countRows] = await this.pool.query<RowDataPacket[]>('SELECT COUNT(*) AS total FROM items');
+    // Search matches the name or the code anywhere in the text (case-insensitive); % and _ typed by the user are taken literally.
+    const term = search?.trim();
+    const where = term ? 'WHERE i.name LIKE ? OR i.code LIKE ?' : '';
+    const like = term ? `%${term.replace(/[\\%_]/g, (ch) => '\\' + ch)}%` : '';
+    const whereParams = term ? [like, like] : [];
+    const [countRows] = await this.pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM items i ${where}`, whereParams);
     const [rows] = await this.pool.query<(Item & RowDataPacket)[]>(
-      `SELECT i.*, c.name AS category_name, c.code AS category_code FROM items i LEFT JOIN item_categories c ON c.id = i.category_id ORDER BY i.name LIMIT ? OFFSET ?`,
-      [paging.pageSize, paging.offset],
+      `SELECT i.*, c.name AS category_name, c.code AS category_code FROM items i LEFT JOIN item_categories c ON c.id = i.category_id ${where} ORDER BY i.name LIMIT ? OFFSET ?`,
+      [...whereParams, paging.pageSize, paging.offset],
     );
     return { rows, total: Number(countRows[0].total), page: paging.page, pageSize: paging.pageSize };
   }
