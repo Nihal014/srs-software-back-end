@@ -14,6 +14,12 @@ export class ItemsController {
     return paging ? this.items.findAllForAdmin(paging) : this.items.findAllForAdmin();
   }
 
+  // Static route: must stay above ':id'.
+  @Get('next-code')
+  nextCode(@Query('categoryId', ParseIntPipe) categoryId: number, @Query('name') name?: string) {
+    return this.items.nextCode(categoryId, name);
+  }
+
   @Get(':id')
   async findOne(@Param('id', ParseIntPipe) id: number) {
     const item = await this.items.findById(id);

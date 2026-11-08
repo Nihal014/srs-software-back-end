@@ -3,9 +3,12 @@ import { IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength 
 const UNITS = ['kg', 'pcs', 'g', 'l', 'ml'];
 
 export class UpsertItemDto {
+  // Left out when creating = generated from the category's code (CODE-00001, CODE-00002...). On an update,
+  // left out = keep the current code.
+  @IsOptional()
   @IsString()
   @MinLength(2)
-  code!: string;
+  code?: string;
 
   @IsString()
   @MinLength(2)
