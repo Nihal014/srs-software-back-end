@@ -70,7 +70,7 @@ export class GrnService {
          FROM grn_lines gl
          JOIN items i ON i.id = gl.item_id
          LEFT JOIN item_categories ic ON ic.id = i.category_id
-         LEFT JOIN batches b ON b.grn_line_id = gl.id
+         LEFT JOIN batches b ON b.grn_line_id = gl.id AND b.source_batch_id IS NULL
         WHERE gl.grn_id = ?
         ORDER BY gl.id`,
       [id],
@@ -163,6 +163,16 @@ export class GrnService {
       );
       const poLineById = new Map(poLineRows.map((r) => [r.id, r]));
 
+      // Received stock goes to the PO's delivery location; if that name no longer matches a location
+      // (it was renamed), it falls back to the first active one.
+      const [locRows] = await conn.query<RowDataPacket[]>(
+        `SELECT id FROM delivery_locations
+          ORDER BY (name = ?) DESC, is_active DESC, id LIMIT 1`,
+        [po.delivery_location],
+      );
+      const locationId = locRows[0]?.id as number | undefined;
+      if (!locationId) throw new BadRequestException('Add a stock location before receiving goods.');
+
       const linesToPost = dto.lines.filter((l) => l.qtyReceived > 0);
       if (!linesToPost.length) {
         throw new BadRequestException('Enter a received quantity on at least one line.');
@@ -221,9 +231,9 @@ export class GrnService {
 
         if (l.qtyAccepted > 0) {
           await conn.query(
-            `INSERT INTO batches (batch_number, item_id, grn_line_id, qty_received, mfg_date, expiry_date)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [batchNumber, pol.item_id, grnLineId, l.qtyAccepted, l.mfgDate, l.expiryDate],
+            `INSERT INTO batches (batch_number, item_id, location_id, grn_line_id, qty_received, mfg_date, expiry_date)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [batchNumber, pol.item_id, locationId, grnLineId, l.qtyAccepted, l.mfgDate, l.expiryDate],
           );
 
           const [priorRows] = await conn.query<RowDataPacket[]>(

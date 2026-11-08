@@ -5,6 +5,8 @@ export interface BundleProduct {
   output_unit: string;
   selling_price: number;
   is_active: boolean;
+  /** What one piece costs in ingredients at the items' current rates (sum of the BOQ lines' costs). */
+  target_cost: number;
 }
 
 export interface BundleBomLine {
@@ -15,6 +17,9 @@ export interface BundleBomLine {
   item_name: string;
   unit: string;
   qty_per_unit: number;
+  /** The item's current rate per unit, and what this ingredient costs per piece (qty x rate). */
+  item_rate: number;
+  line_cost: number;
 }
 
 export interface BundleProductDetail extends BundleProduct {
@@ -31,6 +36,8 @@ export interface BundleProduction {
   labor_cost_per_unit: number;
   overhead_cost_per_unit: number;
   unit_cost: number;
+  /** The recipe's ingredient cost per piece when this run was recorded; null on older runs. */
+  target_material_cost_per_unit: number | null;
   selling_price: number;
   shortage_override: boolean;
   created_by: number | null;
@@ -63,5 +70,7 @@ export interface RequirementLine {
   available: number;
   /** Stock of this item already past its expiry date — not counted in `available`. */
   expired?: number;
+  /** Usable stock in locations Bundling does not draw from (move it with a stock transfer). */
+  elsewhere?: number;
   shortage: number;
 }

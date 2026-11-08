@@ -25,10 +25,10 @@ export class DeliveryLocationsService {
   async create(dto: UpsertDeliveryLocationDto): Promise<DeliveryLocation> {
     try {
       const [result] = await this.pool.query<any>(
-        'INSERT INTO delivery_locations (name) VALUES (?)',
-        [dto.name.trim()],
+        'INSERT INTO delivery_locations (name, is_production) VALUES (?, ?)',
+        [dto.name.trim(), dto.isProduction ?? false],
       );
-      return { id: result.insertId, name: dto.name.trim(), is_active: true };
+      return { id: result.insertId, name: dto.name.trim(), is_active: true, is_production: dto.isProduction ?? false };
     } catch (err: any) {
       if (err?.code === 'ER_DUP_ENTRY') {
         throw new ConflictException(`A delivery location named "${dto.name.trim()}" already exists.`);
@@ -45,9 +45,10 @@ export class DeliveryLocationsService {
     if (!existing[0]) throw new NotFoundException(`Delivery location ${id} not found`);
 
     try {
-      await this.pool.query('UPDATE delivery_locations SET name = ?, is_active = ? WHERE id = ?', [
+      await this.pool.query('UPDATE delivery_locations SET name = ?, is_active = ?, is_production = ? WHERE id = ?', [
         dto.name.trim(),
         dto.isActive ?? true,
+        dto.isProduction ?? false,
         id,
       ]);
     } catch (err: any) {
@@ -63,10 +64,16 @@ export class DeliveryLocationsService {
     return rows[0];
   }
 
-  // Not referenced by any FK (purchase_orders stores the name as plain text),
-  // so this can always hard-delete cleanly.
+  // Purchase orders only store the name as text, but stock batches and transfers reference the location.
   async remove(id: number): Promise<void> {
-    const [result] = await this.pool.query<any>('DELETE FROM delivery_locations WHERE id = ?', [id]);
-    if (result.affectedRows === 0) throw new NotFoundException(`Delivery location ${id} not found`);
+    try {
+      const [result] = await this.pool.query<any>('DELETE FROM delivery_locations WHERE id = ?', [id]);
+      if (result.affectedRows === 0) throw new NotFoundException(`Delivery location ${id} not found`);
+    } catch (err: any) {
+      if (err?.code === 'ER_ROW_IS_REFERENCED_2' || err?.code === 'ER_ROW_IS_REFERENCED') {
+        throw new ConflictException('This location holds stock or has transfers, so it can\'t be deleted. Deactivate it instead.');
+      }
+      throw err;
+    }
   }
 }

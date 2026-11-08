@@ -6,6 +6,10 @@ import type { BundleProduction, RequirementLine } from './bundle.interface.js';
 import type { CreateProductionDto } from './dto/create-production.dto.js';
 import type { Paged } from '../common/pagination.util.js';
 
+// Stock Bundling may use: every location until some are flagged as production sites, then only those.
+const IN_PRODUCTION_STOCK = `(NOT EXISTS (SELECT 1 FROM delivery_locations WHERE is_production = 1)
+  OR location_id IN (SELECT id FROM delivery_locations WHERE is_production = 1))`;
+
 function toDateStr(d: Date) {
   return d.toISOString().slice(0, 10);
 }
@@ -35,7 +39,13 @@ export class BundleProductionsService {
       const [rows] = await this.pool.query<RowDataPacket[]>(
         `SELECT COALESCE(SUM(CASE WHEN expiry_date >= CURDATE() THEN qty_received - qty_consumed + qty_adjusted END), 0) AS available,
                 COALESCE(SUM(CASE WHEN expiry_date < CURDATE() THEN qty_received - qty_consumed + qty_adjusted END), 0) AS expired
-           FROM batches WHERE item_id = ? AND is_quarantined = 0`,
+           FROM batches WHERE item_id = ? AND is_quarantined = 0 AND ${IN_PRODUCTION_STOCK}`,
+        [bom.item_id],
+      );
+      // Usable stock sitting in locations Bundling does not draw from, so a shortage can point at a transfer.
+      const [elsewhereRows] = await this.pool.query<RowDataPacket[]>(
+        `SELECT COALESCE(SUM(qty_received - qty_consumed + qty_adjusted), 0) AS elsewhere
+           FROM batches WHERE item_id = ? AND is_quarantined = 0 AND expiry_date >= CURDATE() AND NOT ${IN_PRODUCTION_STOCK}`,
         [bom.item_id],
       );
       const available = Number(rows[0].available);
@@ -47,6 +57,7 @@ export class BundleProductionsService {
         required,
         available,
         expired: Math.max(0, Number(rows[0].expired)),
+        elsewhere: Math.max(0, Number(elsewhereRows[0].elsewhere)),
         shortage: Math.max(0, Math.round((required - available) * 1000) / 1000),
       });
     }
@@ -194,7 +205,42 @@ export class BundleProductionsService {
         ORDER BY i.name`,
       [id],
     );
-    return { ...production, consumptions };
+    const [ingredients] = await this.pool.query<RowDataPacket[]>(
+      `SELECT bi.item_id, i.name AS item_name, i.unit, bi.target_qty, bi.used_qty, bi.rate,
+              ROUND((bi.used_qty - bi.target_qty) * bi.rate, 2) AS cost_variance
+         FROM bundle_production_ingredients bi JOIN items i ON i.id = bi.item_id
+        WHERE bi.production_id = ?
+        ORDER BY i.name`,
+      [id],
+    );
+    const [otherCosts] = await this.pool.query<RowDataPacket[]>(
+      'SELECT name, amount_per_unit FROM bundle_production_costs WHERE production_id = ? ORDER BY id',
+      [id],
+    );
+    // Where this run's pieces are now (transfers split a run's lot across locations).
+    const [stock] = await this.pool.query<RowDataPacket[]>(
+      `SELECT dl.id AS location_id, dl.name AS location_name,
+              SUM(l.qty_received - l.qty_consumed + l.qty_adjusted) AS qty_available
+         FROM product_lots l JOIN delivery_locations dl ON dl.id = l.location_id
+        WHERE l.production_id = ?
+        GROUP BY dl.id
+       HAVING qty_available > 0
+        ORDER BY dl.name`,
+      [id],
+    );
+    return { ...production, consumptions, ingredients, otherCosts, stock };
+  }
+
+  /** The other costs of the latest run of a product, so the next run can start from them. */
+  async lastOtherCosts(bundleProductId: number) {
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      `SELECT c.name, c.amount_per_unit
+         FROM bundle_production_costs c
+        WHERE c.production_id = (SELECT id FROM bundle_productions WHERE bundle_product_id = ? ORDER BY produced_date DESC, id DESC LIMIT 1)
+        ORDER BY c.id`,
+      [bundleProductId],
+    );
+    return rows;
   }
 
   async create(dto: CreateProductionDto, userId: number, isAdmin = false): Promise<BundleProduction> {
@@ -233,14 +279,27 @@ export class BundleProductionsService {
         cost: number;
       }[] = [];
 
+      // What was really used per ingredient; anything not listed uses the recipe's quantity for the run.
+      const usedOverride = new Map<number, number>();
+      for (const u of dto.usedQuantities ?? []) {
+        if (!bomLines.some((b) => b.item_id === u.itemId)) {
+          throw new BadRequestException(`Item ${u.itemId} is not an ingredient of "${bundle.name}".`);
+        }
+        usedOverride.set(u.itemId, u.qty);
+      }
+      const ingredientRows: { itemId: number; target: number; used: number; rate: number }[] = [];
+
       for (const bom of bomLines) {
-        const required = Math.round(bom.qty_per_unit * dto.qtyProduced * 1000) / 1000;
+        const target = Math.round(bom.qty_per_unit * dto.qtyProduced * 1000) / 1000;
+        const required = usedOverride.has(bom.item_id) ? Math.round(usedOverride.get(bom.item_id)! * 1000) / 1000 : target;
+        ingredientRows.push({ itemId: bom.item_id, target, used: required, rate: Number(bom.rate) });
         let remaining = required;
 
         const [batches] = await conn.query<AvailableBatch[]>(
           `SELECT id, (qty_received - qty_consumed + qty_adjusted) AS qty_available, ? AS rate
              FROM batches
             WHERE item_id = ? AND is_quarantined = 0 AND expiry_date >= CURDATE()
+              AND ${IN_PRODUCTION_STOCK}
               AND (qty_received - qty_consumed + qty_adjusted) > 0
             ORDER BY expiry_date ASC
             FOR UPDATE`,
@@ -299,19 +358,25 @@ export class BundleProductionsService {
       }
 
       const qtyProduced = dto.qtyProduced;
+      // The recipe's ingredient cost per piece at this moment, kept on the run so the actual can be compared with it later.
+      const targetMaterial = Math.round(bomLines.reduce((a, b) => a + Number(b.qty_per_unit) * Number(b.rate), 0) * 100) / 100;
+      const otherCosts = dto.otherCosts ?? [];
+      const costNames = otherCosts.map((c) => c.name.trim().toLowerCase());
+      if (new Set(costNames).size !== costNames.length) throw new BadRequestException('Each other cost can only be listed once.');
       // Payroll-based labour is filled in by recalculateLabor() below, once this run is in the table
       // (it shares the day's wages across every payroll-based run of the date, this one included).
       const laborFromPayroll = !!dto.laborFromPayroll;
       const laborCostPerUnit = laborFromPayroll ? 0 : (dto.laborCostPerUnit ?? 0);
-      const overheadCostPerUnit = dto.overheadCostPerUnit ?? 0;
+      const overheadCostPerUnit = Math.round(otherCosts.reduce((a, c) => a + c.amountPerUnit, 0) * 100) / 100;
       const materialCostPerUnit = materialCostTotal / qtyProduced;
       const unitCost = Math.round((materialCostPerUnit + laborCostPerUnit + overheadCostPerUnit) * 100) / 100;
 
       const [result] = await conn.query<any>(
         `INSERT INTO bundle_productions
            (production_number, bundle_product_id, qty_produced, produced_date, material_cost,
-            labor_cost_per_unit, labor_from_payroll, overhead_cost_per_unit, unit_cost, selling_price, shortage_override, created_by)
-         VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            labor_cost_per_unit, labor_from_payroll, overhead_cost_per_unit, unit_cost,
+            target_material_cost_per_unit, selling_price, shortage_override, created_by)
+         VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           dto.bundleProductId,
           qtyProduced,
@@ -321,6 +386,7 @@ export class BundleProductionsService {
           laborFromPayroll ? 1 : 0,
           overheadCostPerUnit,
           unitCost,
+          targetMaterial,
           dto.sellingPrice ?? bundle.selling_price,
           shortages.length ? 1 : 0,
           userId,
@@ -333,6 +399,34 @@ export class BundleProductionsService {
         productionId,
       ]);
 
+      // The finished pieces go into stock at a location (the production location unless one is chosen).
+      const [locRows] = dto.locationId
+        ? await conn.query<RowDataPacket[]>('SELECT id, name, is_active FROM delivery_locations WHERE id = ?', [dto.locationId])
+        : await conn.query<RowDataPacket[]>(
+            `SELECT id, name, is_active FROM delivery_locations WHERE is_active = 1
+              ORDER BY is_production DESC, id LIMIT 1`,
+          );
+      const storeAt = locRows[0];
+      if (!storeAt) throw new BadRequestException(dto.locationId ? 'That stock location was not found.' : 'Add a stock location first.');
+      if (!storeAt.is_active) throw new BadRequestException(`"${storeAt.name}" is inactive.`);
+      await conn.query(
+        'INSERT INTO product_lots (lot_number, bundle_product_id, location_id, production_id, qty_received) VALUES (?, ?, ?, ?, ?)',
+        [productionNumber, dto.bundleProductId, storeAt.id, productionId, qtyProduced],
+      );
+
+      for (const c of otherCosts) {
+        await conn.query('INSERT INTO bundle_production_costs (production_id, name, amount_per_unit) VALUES (?, ?, ?)', [
+          productionId,
+          c.name.trim(),
+          c.amountPerUnit,
+        ]);
+      }
+      for (const row of ingredientRows) {
+        await conn.query(
+          'INSERT INTO bundle_production_ingredients (production_id, item_id, target_qty, used_qty, rate) VALUES (?, ?, ?, ?, ?)',
+          [productionId, row.itemId, row.target, row.used, row.rate],
+        );
+      }
       for (const c of consumptionsToInsert) {
         await conn.query(
           `INSERT INTO bundle_consumptions (production_id, batch_id, item_id, qty_consumed, rate_at_time, cost)

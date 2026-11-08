@@ -10,6 +10,14 @@ import { ItemsModule } from './items/items.module.js';
 import { DeliveryLocationsModule } from './delivery-locations/delivery-locations.module.js';
 import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module.js';
 import { GrnModule } from './grn/grn.module.js';
+import { PurchaseReturnsModule } from './purchase-returns/purchase-returns.module.js';
+import { StockTransfersModule } from './stock-transfers/stock-transfers.module.js';
+import { ProductTransfersModule } from './product-transfers/product-transfers.module.js';
+import { ProductInventoryModule } from './product-inventory/product-inventory.module.js';
+import { GstReportsModule } from './gst-reports/gst-reports.module.js';
+import { PurchaseInvoicesModule } from './purchase-invoices/purchase-invoices.module.js';
+import { CustomersModule } from './customers/customers.module.js';
+import { SalesDocsModule } from './sales-docs/sales-docs.module.js';
 import { BatchesModule } from './batches/batches.module.js';
 import { BundlingModule } from './bundling/bundling.module.js';
 import { PayrollModule } from './payroll/payroll.module.js';
@@ -26,6 +34,14 @@ import { DashboardModule } from './dashboard/dashboard.module.js';
     DeliveryLocationsModule,
     PurchaseOrdersModule,
     GrnModule,
+    PurchaseReturnsModule,
+    StockTransfersModule,
+    ProductTransfersModule,
+    ProductInventoryModule,
+    GstReportsModule,
+    PurchaseInvoicesModule,
+    CustomersModule,
+    SalesDocsModule,
     BatchesModule,
     BundlingModule,
     PayrollModule,

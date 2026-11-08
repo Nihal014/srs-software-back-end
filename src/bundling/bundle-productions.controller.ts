@@ -30,6 +30,11 @@ export class BundleProductionsController {
     return this.productions.checkRequirement(bundleProductId, Number(qty));
   }
 
+  @Get('last-costs')
+  lastCosts(@Query('bundleProductId', ParseIntPipe) bundleProductId: number) {
+    return this.productions.lastOtherCosts(bundleProductId);
+  }
+
   /** One row per date that has production (the Bundling landing list). Wages: Admin only. */
   @Get('days')
   findDays(@Query('page') page: string | undefined, @Query('pageSize') pageSize: string | undefined, @CurrentUser() user: JwtPayload) {

@@ -5,13 +5,14 @@ import type { Paged } from '../common/pagination.util.js';
 import type { AdjustBatchDto } from './dto/adjust-batch.dto.js';
 
 const BATCH_SELECT = `
-  SELECT b.*, i.name AS item_name, i.unit, i.rate AS item_rate, ic.name AS category_name,
+  SELECT b.*, i.name AS item_name, i.unit, i.rate AS item_rate, ic.name AS category_name, loc.name AS location_name,
          gl.grn_id, g.grn_number, g.purchase_order_id, po.po_number,
          (b.qty_received - b.qty_consumed + b.qty_adjusted) AS qty_available,
          DATEDIFF(b.expiry_date, CURDATE()) AS days_to_expiry
     FROM batches b
     JOIN items i ON i.id = b.item_id
     LEFT JOIN item_categories ic ON ic.id = i.category_id
+    JOIN delivery_locations loc ON loc.id = b.location_id
     JOIN grn_lines gl ON gl.id = b.grn_line_id
     JOIN grns g ON g.id = gl.grn_id
     JOIN purchase_orders po ON po.id = g.purchase_order_id
@@ -25,17 +26,19 @@ export class BatchesService {
    * to aggregate usable/expired quantity per item, so it always calls this unpaginated. With
    * `paging` set, returns `{rows, total, page, pageSize}` for the paginated Batches & Expiry tab. */
   async findAll(): Promise<any[]>;
-  async findAll(paging: { page: number; pageSize: number; offset: number }): Promise<Paged<any>>;
-  async findAll(paging?: { page: number; pageSize: number; offset: number }) {
+  async findAll(paging: { page: number; pageSize: number; offset: number }, locationId?: number): Promise<Paged<any>>;
+  async findAll(paging?: { page: number; pageSize: number; offset: number }, locationId?: number) {
+    const where = locationId ? 'WHERE b.location_id = ?' : '';
+    const whereParams = locationId ? [locationId] : [];
     let total: number | null = null;
     if (paging) {
-      const [countRows] = await this.pool.query<RowDataPacket[]>('SELECT COUNT(*) AS total FROM batches');
+      const [countRows] = await this.pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM batches b ${where}`, whereParams);
       total = Number(countRows[0].total);
     }
     const limitClause = paging ? 'LIMIT ? OFFSET ?' : '';
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      `${BATCH_SELECT} ORDER BY b.expiry_date ASC ${limitClause}`,
-      paging ? [paging.pageSize, paging.offset] : [],
+      `${BATCH_SELECT} ${where} ORDER BY b.expiry_date ASC ${limitClause}`,
+      paging ? [...whereParams, paging.pageSize, paging.offset] : whereParams,
     );
     return paging ? { rows, total: total!, page: paging.page, pageSize: paging.pageSize } : rows;
   }

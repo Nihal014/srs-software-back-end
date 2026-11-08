@@ -8,4 +8,9 @@ export class UpsertDeliveryLocationDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  // Bundling takes ingredients from locations flagged as production sites.
+  @IsOptional()
+  @IsBoolean()
+  isProduction?: boolean;
 }

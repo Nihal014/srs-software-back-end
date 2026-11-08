@@ -12,9 +12,9 @@ export class BatchesController {
   constructor(private readonly batches: BatchesService) {}
 
   @Get()
-  findAll(@Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+  findAll(@Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('locationId') locationId?: string) {
     const paging = parsePaging(page, pageSize);
-    return paging ? this.batches.findAll(paging) : this.batches.findAll();
+    return paging ? this.batches.findAll(paging, Number(locationId) || undefined) : this.batches.findAll();
   }
 
   @Get(':id/adjustments')

@@ -19,8 +19,8 @@ export class BomLineDto {
   @IsInt()
   itemId!: number;
 
-  @IsNumber()
-  @Min(0.0001)
+  @IsNumber({ maxDecimalPlaces: 6 })
+  @Min(0.000001)
   qtyPerUnit!: number;
 }
 

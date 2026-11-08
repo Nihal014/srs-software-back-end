@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { Pool, RowDataPacket } from 'mysql2/promise';
 import { DB_POOL } from '../config/database.module.js';
 import type { ListQuery } from './accounts.interface.js';
@@ -73,7 +73,14 @@ export class ExpensesService {
 
   async remove(id: number) {
     await this.findOne(id);
-    await this.pool.query('DELETE FROM expenses WHERE id = ?', [id]);
+    try {
+      await this.pool.query('DELETE FROM expenses WHERE id = ?', [id]);
+    } catch (err: any) {
+      if (err?.code === 'ER_ROW_IS_REFERENCED_2' || err?.code === 'ER_ROW_IS_REFERENCED') {
+        throw new ConflictException('This expense is a supplier payment. Delete the payment from its purchase invoice instead.');
+      }
+      throw err;
+    }
   }
 
   private async assertRefs(dto: UpsertExpenseDto) {

@@ -4,27 +4,32 @@ import { DB_POOL } from '../config/database.module.js';
 import type { BundleProduct, BundleProductDetail } from './bundle.interface.js';
 import type { UpsertBundleProductDto } from './dto/upsert-bundle-product.dto.js';
 
+// The recipe's target cost per piece: each ingredient's qty per piece x the item's current rate, added up.
+const TARGET_COST_SQL = `COALESCE((SELECT ROUND(SUM(bl.qty_per_unit * i.rate), 2)
+                                    FROM bundle_bom_lines bl JOIN items i ON i.id = bl.item_id
+                                   WHERE bl.bundle_product_id = bp.id), 0) AS target_cost`;
+
 @Injectable()
 export class BundleProductsService {
   constructor(@Inject(DB_POOL) private readonly pool: Pool) {}
 
   async findAll(): Promise<BundleProduct[]> {
     const [rows] = await this.pool.query<(BundleProduct & RowDataPacket)[]>(
-      'SELECT * FROM bundle_products WHERE is_active = 1 ORDER BY name',
+      `SELECT bp.*, ${TARGET_COST_SQL} FROM bundle_products bp WHERE bp.is_active = 1 ORDER BY bp.name`,
     );
     return rows;
   }
 
   async findAllForAdmin(): Promise<BundleProduct[]> {
     const [rows] = await this.pool.query<(BundleProduct & RowDataPacket)[]>(
-      'SELECT * FROM bundle_products ORDER BY name',
+      `SELECT bp.*, ${TARGET_COST_SQL} FROM bundle_products bp ORDER BY bp.name`,
     );
     return rows;
   }
 
   async findById(id: number): Promise<BundleProductDetail | null> {
     const [rows] = await this.pool.query<(BundleProduct & RowDataPacket)[]>(
-      'SELECT * FROM bundle_products WHERE id = ?',
+      `SELECT bp.*, ${TARGET_COST_SQL} FROM bundle_products bp WHERE bp.id = ?`,
       [id],
     );
     const product = rows[0];
@@ -32,7 +37,8 @@ export class BundleProductsService {
 
     const [bomLines] = await this.pool.query<RowDataPacket[]>(
       `SELECT bl.id, bl.bundle_product_id, bl.item_id, i.code AS item_code, i.name AS item_name,
-              i.unit, ic.name AS category_name, bl.qty_per_unit
+              i.unit, ic.name AS category_name, bl.qty_per_unit, i.rate AS item_rate,
+              ROUND(bl.qty_per_unit * i.rate, 2) AS line_cost
          FROM bundle_bom_lines bl
          JOIN items i ON i.id = bl.item_id
          LEFT JOIN item_categories ic ON ic.id = i.category_id

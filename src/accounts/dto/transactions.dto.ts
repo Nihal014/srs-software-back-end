@@ -49,6 +49,11 @@ export class UpsertReceiptDto {
   @IsInt()
   accountId!: number;
 
+  // Which customer paid; only kept for "customer payment" receipts.
+  @IsOptional()
+  @IsInt()
+  customerId?: number | null;
+
   @IsOptional()
   @IsString()
   remarks?: string;
@@ -57,6 +62,11 @@ export class UpsertReceiptDto {
 export class UpsertSaleDto {
   @Matches(DATE_PATTERN, { message: 'saleDate must be YYYY-MM-DD' })
   saleDate!: string;
+
+  // A customer from the Customers master. Without one, the free-text name below is used (walk-in sales).
+  @IsOptional()
+  @IsInt()
+  customerId?: number | null;
 
   @IsOptional()
   @IsString()
